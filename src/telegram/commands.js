@@ -60,18 +60,18 @@ Use /help to see available commands.
     await storeChatId(chatId);
 
     const message = `
-        *Available Commands:*
+*Available Commands:*
 
 
-        /add <address> <chain> - Add a wallet to track
-        /remove <address> <chain> - Remove a tracked wallet
-        /list - List all tracked wallets
-        /balance <chain> - Check your wallet balance on a chain
-        /status - Check bot status
-        /start - Initialize the bot
-        /help - Show this help message
+/add <address> <chain> - Add a wallet to track
+/remove <address> <chain> - Remove a tracked wallet
+/list - List all tracked wallets
+/balance <chain> - Check your wallet balance on a chain
+/status - Check bot status
+/start - Initialize the bot
+/help - Show this help message
 
-        Example: /add 0x123...abc eth
+Example: /add 0x123...abc eth
     `;
 
     bot.sendMessage(chatId, message, { parse_mode: "Markdown" });
