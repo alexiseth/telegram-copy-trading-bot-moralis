@@ -1,0 +1,45 @@
+// src/db/models/trackedWallets.js
+const mongoose = require("mongoose");
+
+const trackedWalletSchema = new mongoose.Schema(
+  {
+    address: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    chain: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    name: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    description: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    isActive: {
+      type: Boolean,
+      default: true,
+    },
+    lastChecked: {
+      type: Date,
+      default: null,
+    },
+  },
+  {
+    timestamps: true, // This adds createdAt and updatedAt fields automatically
+  }
+);
+
+// Create a compound index to ensure unique address+chain combinations
+trackedWalletSchema.index({ address: 1, chain: 1 }, { unique: true });
+
+const TrackedWallet = mongoose.model("TrackedWallet", trackedWalletSchema);
+
+module.exports = TrackedWallet;
