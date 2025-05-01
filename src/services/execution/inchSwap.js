@@ -143,7 +143,7 @@ const executeInchSwap = async (swap, chain) => {
     }
 
     // Build the 1inch API URL
-    const apiUrl = `https://api.1inch.dev/swap/v5.2/${inchChainId}/swap`;
+    const apiUrl = `https://api.1inch.dev/swap/v6.0/${inchChainId}/swap`;
 
     // Create the swap parameters
     const swapParams = {
