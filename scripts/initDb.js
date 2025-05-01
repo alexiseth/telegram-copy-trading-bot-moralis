@@ -43,6 +43,7 @@ const initChains = async () => {
       type: "evm",
       rpcUrl: process.env.ETH_RPC_URL || "https://ethereum.publicnode.com",
       blockExplorer: "https://etherscan.io",
+      swapAggregator: "1inch",
       isActive: true,
       nativeToken: {
         symbol: "ETH",
@@ -58,6 +59,7 @@ const initChains = async () => {
       type: "evm",
       rpcUrl: process.env.BASE_RPC_URL || "https://mainnet.base.org",
       blockExplorer: "https://basescan.org",
+      swapAggregator: "1inch",
       isActive: true,
       nativeToken: {
         symbol: "ETH",
@@ -73,6 +75,7 @@ const initChains = async () => {
       type: "evm",
       rpcUrl: process.env.POLYGON_RPC_URL || "https://polygon-rpc.com",
       blockExplorer: "https://polygonscan.com",
+      swapAggregator: "1inch",
       isActive: true,
       nativeToken: {
         symbol: "MATIC",
@@ -89,6 +92,7 @@ const initChains = async () => {
       rpcUrl:
         process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com",
       blockExplorer: "https://solscan.io",
+      swapAggregator: "jupiter",
       isActive: true,
       nativeToken: {
         symbol: "SOL",
@@ -99,6 +103,20 @@ const initChains = async () => {
       moralisChainName: "solana",
     },
   ];
+
+  // Add derived explorer URLs
+  defaultChains.forEach((chain) => {
+    // Set derived URLs for backwards compatibility
+    chain.explorerUrl = chain.blockExplorer;
+
+    if (chain.type === "solana") {
+      chain.explorerTxUrl = `${chain.blockExplorer}/tx/{hash}`;
+      chain.explorerAddressUrl = `${chain.blockExplorer}/account/{address}`;
+    } else {
+      chain.explorerTxUrl = `${chain.blockExplorer}/tx/{hash}`;
+      chain.explorerAddressUrl = `${chain.blockExplorer}/address/{address}`;
+    }
+  });
 
   // Insert default chains
   await Chain.insertMany(defaultChains);

@@ -33,11 +33,10 @@ const trackedWalletSchema = new mongoose.Schema(
     },
   },
   {
-    timestamps: true, // This adds createdAt and updatedAt fields automatically
+    timestamps: true,
   }
 );
 
-// Create a compound index to ensure unique address+chain combinations
 trackedWalletSchema.index({ address: 1, chain: 1 }, { unique: true });
 
 const TrackedWallet = mongoose.model("TrackedWallet", trackedWalletSchema);

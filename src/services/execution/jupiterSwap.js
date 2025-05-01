@@ -85,7 +85,6 @@ const executeJupiterSwap = async (swap) => {
     orderUrl.searchParams.append("outputMint", toToken.address);
     orderUrl.searchParams.append("amount", inputAmount.toString());
     orderUrl.searchParams.append("taker", userPublicKey);
-    orderUrl.searchParams.append("slippageBps", "100"); // 1% slippage
 
     const { data: orderResponse } = await axios.get(orderUrl.toString());
 

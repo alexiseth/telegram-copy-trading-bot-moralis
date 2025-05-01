@@ -5,7 +5,7 @@ const BotConfig = require("../../db/models/botConfig");
 const TrackedWallet = require("../../db/models/trackedWallets");
 const { executeInchSwap } = require("../execution/inchSwap");
 const { executeJupiterSwap } = require("../execution/jupiterSwap");
-const { getBot, getActiveChatIds } = require("../../telegram");
+const { getBot } = require("../../telegram");
 const {
   formatSwapNotification,
   formatErrorNotification,
@@ -320,6 +320,6 @@ const stopSwapProcessor = () => {
 module.exports = {
   startSwapProcessor,
   stopSwapProcessor,
-  processSwaps, // Exported for testing or manual triggering
-  sendNotification, // Exported for use in other modules
+  processSwaps,
+  sendNotification,
 };
