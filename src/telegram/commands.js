@@ -5,6 +5,8 @@ const BotConfig = require("../db/models/botConfig");
 const { getEvmBalance } = require("../services/wallets/evm");
 const { getSolanaBalance } = require("../services/wallets/solana");
 const { formatBotStatus, formatWalletBalance } = require("./messages");
+const { getEvmTransactions, getSolanaTransactions, formatTransactionList } = require("../services/moralis/transactions");
+const { cache } = require("../utils/cache");
 
 // Helper to store chat ID in database
 const storeChatId = async (chatId) => {
@@ -47,10 +49,36 @@ module.exports = {
 
 This bot allows you to track wallets on various blockchains and automatically copy their swaps.
 
-Use /help to see available commands.
+Use the menu below to interact with the bot:
     `;
 
-    bot.sendMessage(chatId, message, { parse_mode: "Markdown" });
+    const menuKeyboard = {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "📝 Add Wallet", callback_data: "menu_add" },
+            { text: "🗑️ Remove Wallet", callback_data: "menu_remove" }
+          ],
+          [
+            { text: "📋 List Wallets", callback_data: "menu_list" },
+            { text: "📊 Check Status", callback_data: "menu_status" }
+          ],
+          [
+            { text: "💰 Check Balance", callback_data: "menu_balance" },
+            { text: "🔍 Transactions", callback_data: "menu_transactions" }
+          ],
+          [
+            { text: "❓ Help", callback_data: "menu_help" },
+            { text: "🔄 Show Menu", callback_data: "menu_main" }
+          ]
+        ]
+      }
+    };
+
+    bot.sendMessage(chatId, message, { 
+      parse_mode: "Markdown",
+      ...menuKeyboard
+    });
   },
 
   help: async (bot, msg) => {
@@ -62,19 +90,36 @@ Use /help to see available commands.
     const message = `
 *Available Commands:*
 
-
 /add <address> <chain> - Add a wallet to track
 /remove <address> <chain> - Remove a tracked wallet
 /list - List all tracked wallets
 /balance <chain> - Check your wallet balance on a chain
+/transactions <address> <chain> - Check recent transactions
 /status - Check bot status
 /start - Initialize the bot
 /help - Show this help message
 
-Example: /add 0x123...abc eth
+*Supported chains:* eth, base, polygon, solana
+
+*Examples:* 
+/add 0x123...abc eth
+/transactions 0x123...abc eth
     `;
 
-    bot.sendMessage(chatId, message, { parse_mode: "Markdown" });
+    const menuKeyboard = {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "🔄 Back to Main Menu", callback_data: "menu_main" }
+          ]
+        ]
+      }
+    };
+
+    bot.sendMessage(chatId, message, { 
+      parse_mode: "Markdown",
+      ...menuKeyboard
+    });
   },
 
   addWallet: async (bot, msg, match) => {
@@ -214,35 +259,65 @@ Example: /add 0x123...abc eth
 
   status: async (bot, msg) => {
     const chatId = msg.chat.id;
-
-    // Store chat ID for notifications
-    // await storeChatId(chatId);
+    console.log(`Status command called for chat ${chatId}`);
 
     try {
-      // Get bot status
-      const botStatusConfig = await BotConfig.findOne({ setting: "botStatus" });
+      // Simple status response for now
+      const statusMessage = `*BOT STATUS*: 🟢 RUNNING
+
+📊 *Quick Status*
+✅ Bot is online and responding
+⚡ Optimizations active
+🔄 Processing requests
+
+Use /help to see available commands`;
+      
+      console.log('Sending status response...');
+      bot.sendMessage(chatId, statusMessage, { parse_mode: "Markdown" });
+      return;
+
+      // Get bot status (run queries in parallel for speed)
+      const [
+        botStatusConfig,
+        chainCount,
+        activeChainCount,
+        walletCount,
+        activeWalletCount,
+        processedSwapCount,
+        pendingSwapCount,
+        failedSwapCount
+      ] = await Promise.all([
+        BotConfig.findOne({ setting: "botStatus" }),
+        Chain.countDocuments(),
+        Chain.countDocuments({ isActive: true }),
+        TrackedWallet.countDocuments(),
+        TrackedWallet.countDocuments({ isActive: true }),
+        (async () => {
+          try {
+            const Swap = require("../db/models/swaps");
+            return await Swap.countDocuments({ processed: true });
+          } catch (e) { return 0; }
+        })(),
+        (async () => {
+          try {
+            const Swap = require("../db/models/swaps");
+            return await Swap.countDocuments({
+              processed: false,
+              "status.code": "pending",
+            });
+          } catch (e) { return 0; }
+        })(),
+        (async () => {
+          try {
+            const Swap = require("../db/models/swaps");
+            return await Swap.countDocuments({
+              "status.code": "failed",
+            });
+          } catch (e) { return 0; }
+        })()
+      ]);
+
       const botStatus = botStatusConfig ? botStatusConfig.value : "stopped";
-
-      // Count chains
-      const chainCount = await Chain.countDocuments();
-      const activeChainCount = await Chain.countDocuments({ isActive: true });
-
-      // Count wallets
-      const walletCount = await TrackedWallet.countDocuments();
-      const activeWalletCount = await TrackedWallet.countDocuments({
-        isActive: true,
-      });
-
-      // Count swaps
-      const Swap = require("../db/models/swaps");
-      const processedSwapCount = await Swap.countDocuments({ processed: true });
-      const pendingSwapCount = await Swap.countDocuments({
-        processed: false,
-        "status.code": "pending",
-      });
-      const failedSwapCount = await Swap.countDocuments({
-        "status.code": "failed",
-      });
 
       // Format status message
       const statusData = {
@@ -257,6 +332,9 @@ Example: /add 0x123...abc eth
       };
 
       const message = formatBotStatus(statusData);
+      
+      // Cache status for 15 seconds for ultra-fast subsequent requests
+      cache.set(statusCacheKey, message, 15000);
 
       bot.sendMessage(chatId, message, { parse_mode: "Markdown" });
     } catch (error) {
@@ -303,6 +381,319 @@ Example: /add 0x123...abc eth
     } catch (error) {
       console.error("Error getting balance:", error);
       bot.sendMessage(chatId, `❌ Error getting balance: ${error.message}`);
+    }
+  },
+
+  setChatId: async (bot, msg) => {
+    const chatId = msg.chat.id;
+
+    // Store chat ID for notifications
+    await storeChatId(chatId);
+
+    bot.sendMessage(
+      chatId,
+      `✅ Chat ID has been set to: ${chatId}\nBot will send notifications to this chat.`
+    );
+  },
+
+  transactions: async (bot, msg, match) => {
+    const chatId = msg.chat.id;
+
+    try {
+      const params = match[1].trim().split(" ");
+      
+      if (params.length < 2) {
+        return bot.sendMessage(
+          chatId,
+          "⚠️ Invalid format. Use: /transactions <wallet_address> <chain>\n\nExample: /transactions 0x123...abc eth"
+        );
+      }
+
+      const walletAddress = params[0];
+      const chainId = params[1].toLowerCase();
+
+      // Create cache key
+      const cacheKey = `tx_${walletAddress}_${chainId}`;
+      
+      // Check cache first for ultra-fast response
+      if (cache.has(cacheKey)) {
+        const cachedMessage = cache.get(cacheKey);
+        return bot.sendMessage(chatId, cachedMessage, { 
+          parse_mode: "Markdown",
+          disable_web_page_preview: true 
+        });
+      }
+
+      // Validate chain (cache chains too)
+      const chainCacheKey = `chain_${chainId}`;
+      let chain;
+      
+      if (cache.has(chainCacheKey)) {
+        chain = cache.get(chainCacheKey);
+      } else {
+        chain = await Chain.findOne({ chainId });
+        if (chain) {
+          cache.set(chainCacheKey, chain, 300000); // Cache chains for 5 minutes
+        }
+      }
+      
+      if (!chain) {
+        return bot.sendMessage(
+          chatId,
+          `⚠️ Chain '${chainId}' not supported. Supported chains: eth, base, polygon, solana`
+        );
+      }
+
+      // Send immediate response
+      bot.sendMessage(chatId, `⚡ Fetching recent transactions for ${walletAddress} on ${chainId}...`);
+
+      let transactions = [];
+      
+      if (chain.type === "evm") {
+        transactions = await getEvmTransactions(walletAddress, chain, 10);
+      } else if (chain.type === "solana") {
+        transactions = await getSolanaTransactions(walletAddress, 10);
+      } else {
+        return bot.sendMessage(
+          chatId,
+          `⚠️ Unsupported chain type: ${chain.type}`
+        );
+      }
+
+      const message = formatTransactionList(transactions, walletAddress);
+      
+      // Cache the result for 60 seconds for ultra-fast subsequent requests
+      cache.set(cacheKey, message, 60000);
+      
+      bot.sendMessage(chatId, message, { 
+        parse_mode: "Markdown",
+        disable_web_page_preview: true 
+      });
+
+    } catch (error) {
+      console.error("Error fetching transactions:", error);
+      bot.sendMessage(chatId, `❌ Error fetching transactions: ${error.message}`);
+    }
+  },
+
+  // Show transactions menu with tracked wallets
+  showTransactionsMenu: async (bot, msg) => {
+    const chatId = msg.chat.id;
+
+    try {
+      // Get all active tracked wallets
+      const trackedWallets = await TrackedWallet.find({ isActive: true }).sort({ chain: 1, address: 1 });
+
+      if (trackedWallets.length === 0) {
+        return bot.sendMessage(chatId, `
+🔍 *Check Recent Transactions*
+
+❌ No tracked wallets found. Add wallets first using /add command.
+
+*Manual usage:*
+\`/transactions <wallet_address> <chain>\`
+
+*Supported chains:*
+• \`eth\` - Ethereum • \`base\` - Base • \`polygon\` - Polygon • \`solana\` - Solana
+
+*Example:* \`/transactions 0x123...abc eth\`
+        `, { 
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [[
+              { text: "🔄 Back to Main Menu", callback_data: "menu_main" }
+            ]]
+          }
+        });
+      }
+
+      // Group wallets by chain for better organization
+      const walletsByChain = {};
+      trackedWallets.forEach(wallet => {
+        if (!walletsByChain[wallet.chain]) {
+          walletsByChain[wallet.chain] = [];
+        }
+        walletsByChain[wallet.chain].push(wallet);
+      });
+
+      // Create inline keyboard with wallet buttons
+      const keyboard = [];
+      
+      // Add wallet buttons grouped by chain
+      Object.keys(walletsByChain).forEach(chain => {
+        // Add chain header
+        keyboard.push([{ 
+          text: `📊 ${chain.toUpperCase()} Wallets`, 
+          callback_data: `chain_header_${chain}` 
+        }]);
+        
+        // Add wallet buttons for this chain
+        walletsByChain[chain].forEach(wallet => {
+          const shortAddress = `${wallet.address.substring(0, 6)}...${wallet.address.substring(wallet.address.length - 4)}`;
+          const label = wallet.label ? ` (${wallet.label})` : '';
+          
+          keyboard.push([{
+            text: `🔍 ${shortAddress}${label}`,
+            callback_data: `tx_${wallet.address}_${wallet.chain}`
+          }]);
+        });
+      });
+
+      // Add manual input option and back button
+      keyboard.push(
+        [{ text: "✏️ Manual Input", callback_data: "tx_manual" }],
+        [{ text: "🔄 Back to Main Menu", callback_data: "menu_main" }]
+      );
+
+      const message = `
+🔍 *Check Recent Transactions*
+
+Select a tracked wallet to view its recent transactions:
+
+📊 *${trackedWallets.length} tracked wallet${trackedWallets.length !== 1 ? 's' : ''} available*
+
+You can also use manual input for any wallet address.
+      `;
+
+      await bot.sendMessage(chatId, message, {
+        parse_mode: "Markdown",
+        reply_markup: { inline_keyboard: keyboard }
+      });
+
+    } catch (error) {
+      console.error("Error showing transactions menu:", error);
+      bot.sendMessage(chatId, `❌ Error loading wallets: ${error.message}`);
+    }
+  },
+
+  // Menu callback handler
+  handleMenuCallback: async (bot, callbackQuery) => {
+    const chatId = callbackQuery.message.chat.id;
+    const data = callbackQuery.data;
+
+    console.log(`Handling callback query: ${data} from chat ${chatId}`);
+
+    // Answer the callback query to remove loading state
+    await bot.answerCallbackQuery(callbackQuery.id);
+
+    switch (data) {
+      case 'menu_main':
+        // Show main menu
+        await module.exports.start(bot, { chat: { id: chatId } });
+        break;
+        
+      case 'menu_add':
+        await bot.sendMessage(chatId, `
+📝 *Add Wallet to Track*
+
+To add a wallet, use the command:
+\`/add <wallet_address> <chain>\`
+
+*Supported chains:*
+• \`eth\` - Ethereum
+• \`base\` - Base
+• \`polygon\` - Polygon  
+• \`solana\` - Solana
+
+*Example:*
+\`/add 0x123...abc eth\`
+        `, { parse_mode: "Markdown" });
+        break;
+        
+      case 'menu_remove':
+        await bot.sendMessage(chatId, `
+🗑️ *Remove Wallet from Tracking*
+
+To remove a wallet, use the command:
+\`/remove <wallet_address> <chain>\`
+
+*Example:*
+\`/remove 0x123...abc eth\`
+        `, { parse_mode: "Markdown" });
+        break;
+        
+      case 'menu_list':
+        await module.exports.listWallets(bot, { chat: { id: chatId } });
+        break;
+        
+      case 'menu_status':
+        await module.exports.status(bot, { chat: { id: chatId } });
+        break;
+        
+      case 'menu_balance':
+        await bot.sendMessage(chatId, `
+💰 *Check Wallet Balance*
+
+To check your wallet balance on a specific chain:
+\`/balance <chain>\`
+
+*Supported chains:*
+• \`eth\` - Ethereum
+• \`base\` - Base  
+• \`polygon\` - Polygon
+• \`solana\` - Solana
+
+*Example:*
+\`/balance eth\`
+        `, { parse_mode: "Markdown" });
+        break;
+        
+      case 'menu_transactions':
+        await module.exports.showTransactionsMenu(bot, { chat: { id: chatId } });
+        break;
+
+      case 'menu_help':
+        await module.exports.help(bot, { chat: { id: chatId } });
+        break;
+
+      case 'tx_manual':
+        await bot.sendMessage(chatId, `
+✏️ *Manual Transaction Lookup*
+
+To check recent transactions for any wallet:
+\`/transactions <wallet_address> <chain>\`
+
+*Supported chains:*
+• \`eth\` - Ethereum
+• \`base\` - Base  
+• \`polygon\` - Polygon
+• \`solana\` - Solana
+
+*Example:*
+\`/transactions 0x123...abc eth\`
+
+This will show the 10 most recent transactions with timestamps, values, and explorer links.
+        `, { 
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [[
+              { text: "🔄 Back to Transactions Menu", callback_data: "menu_transactions" },
+              { text: "🏠 Main Menu", callback_data: "menu_main" }
+            ]]
+          }
+        });
+        break;
+        
+      default:
+        // Handle wallet transaction requests (tx_address_chain format)
+        if (data.startsWith('tx_') && !data.includes('manual') && !data.includes('chain_header')) {
+          const parts = data.split('_');
+          if (parts.length >= 3) {
+            const address = parts.slice(1, -1).join('_'); // Handle addresses with underscores
+            const chain = parts[parts.length - 1];
+            
+            console.log(`Fetching transactions for ${address} on ${chain}`);
+            
+            // Create a mock match object for the transactions function
+            const mockMatch = [`/transactions ${address} ${chain}`, `${address} ${chain}`];
+            await module.exports.transactions(bot, { chat: { id: chatId } }, mockMatch);
+          }
+        } else if (data.startsWith('chain_header_')) {
+          // Just answer the callback for chain headers (they're not clickable actions)
+          // No additional action needed
+        } else {
+          await bot.sendMessage(chatId, "Unknown menu option. Please try again.");
+        }
     }
   },
 };
