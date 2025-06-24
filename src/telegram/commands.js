@@ -2,6 +2,8 @@
 const TrackedWallet = require("../db/models/trackedWallets");
 const Chain = require("../db/models/chains");
 const BotConfig = require("../db/models/botConfig");
+const SnipeTarget = require("../db/models/snipeTargets");
+const SnipeExecution = require("../db/models/snipeExecutions");
 const { getEvmBalance } = require("../services/wallets/evm");
 const { getSolanaBalance } = require("../services/wallets/solana");
 const { formatBotStatus, formatWalletBalance } = require("./messages");
@@ -45,31 +47,31 @@ module.exports = {
     await storeChatId(chatId);
 
     const message = `
-👋 *Welcome to the Telegram Copy Trading Bot!*
+🎯 *Solana Sniping Bot*
 
-This bot allows you to track wallets on various blockchains and automatically copy their swaps.
+*Quick Commands:*
+• \`/snipe_add <token> <sol_amount>\` - Add snipe target
+• \`/snipe_list\` - View active targets  
+• \`/snipe_stats\` - Performance stats
+• \`/balance solana\` - Check SOL balance
 
-Use the menu below to interact with the bot:
+*Example:*
+\`/snipe_add So11111111111111111111111111111111111111112 0.001\`
     `;
 
     const menuKeyboard = {
       reply_markup: {
         inline_keyboard: [
           [
-            { text: "📝 Add Wallet", callback_data: "menu_add" },
-            { text: "🗑️ Remove Wallet", callback_data: "menu_remove" }
+            { text: "🎯 Add Snipe Target", callback_data: "snipe_add_help" },
+            { text: "📋 List Targets", callback_data: "snipe_list" }
           ],
           [
-            { text: "📋 List Wallets", callback_data: "menu_list" },
-            { text: "📊 Check Status", callback_data: "menu_status" }
+            { text: "📊 Statistics", callback_data: "snipe_stats" },
+            { text: "💰 Check Balance", callback_data: "menu_balance" }
           ],
           [
-            { text: "💰 Check Balance", callback_data: "menu_balance" },
-            { text: "🔍 Transactions", callback_data: "menu_transactions" }
-          ],
-          [
-            { text: "❓ Help", callback_data: "menu_help" },
-            { text: "🔄 Show Menu", callback_data: "menu_main" }
+            { text: "❓ Help", callback_data: "snipe_help" }
           ]
         ]
       }
@@ -88,29 +90,36 @@ Use the menu below to interact with the bot:
     await storeChatId(chatId);
 
     const message = `
-*Available Commands:*
+🎯 *Solana Sniping Bot Help*
 
-/add <address> <chain> - Add a wallet to track
-/remove <address> <chain> - Remove a tracked wallet
-/list - List all tracked wallets
-/balance <chain> - Check your wallet balance on a chain
-/transactions <address> <chain> - Check recent transactions
-/status - Check bot status
-/start - Initialize the bot
-/help - Show this help message
+*Main Commands:*
+• \`/snipe_add <token> <sol_amount>\` - Add snipe target
+• \`/snipe_list\` - View active targets
+• \`/snipe_stats\` - Performance statistics
+• \`/balance solana\` - Check SOL balance
 
-*Supported chains:* eth, base, polygon, solana
+*Examples:*
+\`/snipe_add So11111111111111111111111111111111111111112 0.001\`
+\`/snipe_add EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v 0.005\`
 
-*Examples:* 
-/add 0x123...abc eth
-/transactions 0x123...abc eth
+*How it works:*
+1. Add tokens you want to snipe
+2. Bot monitors for new liquidity
+3. Executes trades automatically
+4. Get instant notifications
+
+*Settings:*
+• Min amount: 0.001 SOL
+• Default slippage: 15%
+• Execution speed: ~200ms
     `;
 
     const menuKeyboard = {
       reply_markup: {
         inline_keyboard: [
           [
-            { text: "🔄 Back to Main Menu", callback_data: "menu_main" }
+            { text: "🎯 Add Target", callback_data: "snipe_add_help" },
+            { text: "📋 List Targets", callback_data: "snipe_list" }
           ]
         ]
       }
@@ -571,10 +580,7 @@ You can also use manual input for any wallet address.
     const chatId = callbackQuery.message.chat.id;
     const data = callbackQuery.data;
 
-    console.log(`Handling callback query: ${data} from chat ${chatId}`);
-
-    // Answer the callback query to remove loading state
-    await bot.answerCallbackQuery(callbackQuery.id);
+    console.log(`🎯 Processing menu callback: "${data}" from chat ${chatId}`);
 
     switch (data) {
       case 'menu_main':
@@ -644,6 +650,94 @@ To check your wallet balance on a specific chain:
 
       case 'menu_help':
         await module.exports.help(bot, { chat: { id: chatId } });
+        break;
+
+      case 'menu_sniping':
+        await module.exports.showSnipingMenu(bot, { chat: { id: chatId } });
+        break;
+
+      case 'menu_snipe_stats':
+        await module.exports.showSnipeStats(bot, { chat: { id: chatId } });
+        break;
+
+      case 'snipe_add_help':
+        await bot.sendMessage(chatId, `
+➕ *Add Snipe Target*
+
+To add a token to snipe, use:
+\`/snipe_add <token_address> <sol_amount> [max_slippage]\`
+
+*Parameters:*
+• token_address: Solana token mint address (44 characters)
+• sol_amount: Amount of SOL to spend (minimum 0.001)
+• max_slippage: Maximum slippage % (optional, default 15%)
+
+*Example:*
+\`/snipe_add So11111111111111111111111111111111111111112 0.1 15\`
+
+This will snipe 0.1 SOL worth of the token with max 15% slippage.
+        `, { 
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [[
+              { text: "🔄 Back to Sniping Menu", callback_data: "menu_sniping" }
+            ]]
+          }
+        });
+        break;
+
+      case 'snipe_list':
+        await module.exports.snipeList(bot, { chat: { id: chatId } });
+        break;
+
+      case 'snipe_pause':
+        await module.exports.snipePause(bot, { chat: { id: chatId } });
+        break;
+
+      case 'snipe_resume':
+        await module.exports.snipeResume(bot, { chat: { id: chatId } });
+        break;
+
+      case 'snipe_stats':
+        await module.exports.showSnipeStats(bot, { chat: { id: chatId } });
+        break;
+
+      case 'snipe_help':
+        await bot.sendMessage(chatId, `
+🎯 *Solana Sniping Bot Help*
+
+*Available Commands:*
+• \`/snipe_add <token> <sol> [slippage]\` - Add snipe target
+• \`/snipe_remove <token>\` - Remove target  
+• \`/snipe_list\` - List active targets
+• \`/snipe_pause\` - Pause all sniping
+• \`/snipe_resume\` - Resume sniping
+• \`/snipe_stats\` - View statistics
+
+*How It Works:*
+1. Add tokens you want to snipe with /snipe_add
+2. Bot monitors Solana for new liquidity pools
+3. When your target token gets liquidity, bot executes the trade
+4. You get notified of results instantly
+
+*Settings:*
+• Min Amount: 0.001 SOL
+• Max Slippage: 0.5% - 50%
+• Priority Fee: 0.01 SOL (configurable)
+• Execution Speed: ~200ms target
+
+*Safety:*
+• Balance verification before execution
+• Slippage protection
+• Comprehensive error handling
+        `, { 
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [[
+              { text: "🔄 Back to Sniping Menu", callback_data: "menu_sniping" }
+            ]]
+          }
+        });
         break;
 
       case 'tx_manual':
@@ -728,4 +822,350 @@ const formatWalletList = (wallets, chains) => {
   }
 
   return message;
+};
+
+// Sniping command handlers
+module.exports.snipeAdd = async (bot, msg, match) => {
+  const chatId = msg.chat.id;
+  const userId = chatId.toString();
+
+  console.log(`🎯 Processing snipe_add command from user ${userId}`);
+  console.log(`📝 Match data:`, match);
+
+  try {
+    if (!match || !match[1]) {
+      console.log("❌ No parameters provided");
+      return bot.sendMessage(chatId, "⚠️ No parameters provided. Use: /snipe_add <token_address> <sol_amount> [max_slippage]");
+    }
+
+    const params = match[1].trim().split(" ");
+    console.log(`📊 Parsed parameters:`, params);
+
+    if (params.length < 2) {
+      console.log("❌ Insufficient parameters");
+      return bot.sendMessage(
+        chatId,
+        "⚠️ Invalid format. Use: /snipe_add <token_address> <sol_amount> [max_slippage]\n\n" +
+        "Example: `/snipe_add So11111111111111111111111111111111111111112 0.1 15`\n\n" +
+        "Parameters:\n" +
+        "• token_address: Solana token mint address\n" +
+        "• sol_amount: Amount of SOL to spend (minimum 0.001)\n" +
+        "• max_slippage: Maximum slippage % (optional, default 15%)",
+        { parse_mode: "Markdown" }
+      );
+    }
+
+    const tokenAddress = params[0];
+    const targetAmount = parseFloat(params[1]);
+    const maxSlippage = params.length > 2 ? parseFloat(params[2]) : 15.0;
+
+    console.log(`🔍 Validating: token=${tokenAddress}, amount=${targetAmount}, slippage=${maxSlippage}`);
+
+    // Validation
+    if (isNaN(targetAmount) || targetAmount < 0.001) {
+      console.log("❌ Invalid amount validation failed");
+      return bot.sendMessage(chatId, "⚠️ Invalid amount. Minimum is 0.001 SOL");
+    }
+
+    if (isNaN(maxSlippage) || maxSlippage < 0.5 || maxSlippage > 50) {
+      console.log("❌ Invalid slippage validation failed");
+      return bot.sendMessage(chatId, "⚠️ Invalid slippage. Must be between 0.5% and 50%");
+    }
+
+    console.log("✅ Validation passed, checking for existing targets...");
+
+    // Check if target already exists
+    const existingTarget = await SnipeTarget.getTargetByToken(tokenAddress, userId);
+    if (existingTarget) {
+      console.log("⚠️ Target already exists");
+      return bot.sendMessage(
+        chatId,
+        `⚠️ Already have an active snipe target for this token.\n` +
+        `Current target: ${existingTarget.targetAmount} SOL with ${existingTarget.maxSlippage}% slippage\n\n` +
+        `Use /snipe_remove first to replace it.`
+      );
+    }
+
+    console.log("✅ No existing target, creating new snipe target...");
+
+    // Create snipe target
+    const target = new SnipeTarget({
+      userId: userId,
+      tokenAddress: tokenAddress,
+      targetAmount: targetAmount,
+      maxSlippage: maxSlippage,
+      isActive: true,
+      snipeStatus: "pending"
+    });
+
+    console.log("💾 Saving snipe target to database...");
+    await target.save();
+    console.log(`✅ Snipe target saved with ID: ${target._id}`);
+
+    bot.sendMessage(
+      chatId,
+      `✅ *Snipe Target Added*\n\n` +
+      `🎯 Token: \`${tokenAddress}\`\n` +
+      `💰 Amount: ${targetAmount} SOL\n` +
+      `📊 Max Slippage: ${maxSlippage}%\n` +
+      `⚡ Priority Fee: ${target.priorityFee} SOL\n\n` +
+      `🔍 Bot will monitor for liquidity and execute when conditions are met.`,
+      { parse_mode: "Markdown" }
+    );
+  } catch (error) {
+    console.error("❌ Error adding snipe target:", error);
+    bot.sendMessage(chatId, `❌ Error adding snipe target: ${error.message}`);
+  }
+};
+
+module.exports.snipeRemove = async (bot, msg, match) => {
+  const chatId = msg.chat.id;
+  const userId = chatId.toString();
+
+  try {
+    const tokenAddress = match[1].trim();
+
+    if (!tokenAddress) {
+      return bot.sendMessage(
+        chatId,
+        "⚠️ Invalid format. Use: /snipe_remove <token_address>\n\n" +
+        "Example: `/snipe_remove So11111111111111111111111111111111111111112`",
+        { parse_mode: "Markdown" }
+      );
+    }
+
+    const target = await SnipeTarget.getTargetByToken(tokenAddress, userId);
+
+    if (!target) {
+      return bot.sendMessage(
+        chatId,
+        `⚠️ No active snipe target found for token: \`${tokenAddress}\``,
+        { parse_mode: "Markdown" }
+      );
+    }
+
+    // Mark as cancelled
+    target.snipeStatus = "cancelled";
+    target.isActive = false;
+    await target.save();
+
+    bot.sendMessage(
+      chatId,
+      `✅ *Snipe Target Removed*\n\n` +
+      `🎯 Token: \`${tokenAddress}\`\n` +
+      `💰 Amount: ${target.targetAmount} SOL\n` +
+      `📊 Status: Cancelled`,
+      { parse_mode: "Markdown" }
+    );
+  } catch (error) {
+    console.error("Error removing snipe target:", error);
+    bot.sendMessage(chatId, `❌ Error removing snipe target: ${error.message}`);
+  }
+};
+
+module.exports.snipeList = async (bot, msg) => {
+  const chatId = msg.chat.id;
+  const userId = chatId.toString();
+
+  try {
+    const targets = await SnipeTarget.getActiveTargets(userId);
+
+    if (targets.length === 0) {
+      return bot.sendMessage(
+        chatId,
+        `📋 *No Active Snipe Targets*\n\n` +
+        `Use /snipe_add to create your first snipe target.\n\n` +
+        `*Example:*\n\`/snipe_add <token_address> 0.1 15\``,
+        { parse_mode: "Markdown" }
+      );
+    }
+
+    let message = `🎯 *Active Snipe Targets* (${targets.length})\n\n`;
+
+    for (const target of targets) {
+      const statusIcon = target.snipeStatus === "pending" ? "⏳" : 
+                       target.snipeStatus === "paused" ? "⏸️" : "❓";
+      
+      message += `${statusIcon} **Target ${targets.indexOf(target) + 1}**\n`;
+      message += `🪙 Token: \`${target.tokenAddress.substring(0, 20)}...\`\n`;
+      message += `💰 Amount: ${target.targetAmount} SOL\n`;
+      message += `📊 Max Slippage: ${target.maxSlippage}%\n`;
+      message += `⚡ Priority Fee: ${target.priorityFee} SOL\n`;
+      message += `📅 Created: ${target.createdAt.toLocaleDateString()}\n`;
+      message += `🔄 Status: ${target.snipeStatus}\n\n`;
+    }
+
+    message += `\n*Commands:*\n`;
+    message += `• /snipe_remove <token_address> - Remove target\n`;
+    message += `• /snipe_pause - Pause all sniping\n`;
+    message += `• /snipe_resume - Resume sniping`;
+
+    bot.sendMessage(chatId, message, { parse_mode: "Markdown" });
+  } catch (error) {
+    console.error("Error listing snipe targets:", error);
+    bot.sendMessage(chatId, `❌ Error listing snipe targets: ${error.message}`);
+  }
+};
+
+module.exports.snipePause = async (bot, msg) => {
+  const chatId = msg.chat.id;
+  const userId = chatId.toString();
+
+  try {
+    const targets = await SnipeTarget.getActiveTargets(userId);
+
+    if (targets.length === 0) {
+      return bot.sendMessage(chatId, "⚠️ No active snipe targets to pause.");
+    }
+
+    // Pause all targets
+    const updateResult = await SnipeTarget.updateMany(
+      { userId: userId, isActive: true, snipeStatus: "pending" },
+      { snipeStatus: "paused", isActive: false }
+    );
+
+    bot.sendMessage(
+      chatId,
+      `⏸️ *Sniping Paused*\n\n` +
+      `📊 Paused ${updateResult.modifiedCount} snipe target(s)\n\n` +
+      `Use /snipe_resume to resume sniping.`
+    );
+  } catch (error) {
+    console.error("Error pausing snipe targets:", error);
+    bot.sendMessage(chatId, `❌ Error pausing snipe targets: ${error.message}`);
+  }
+};
+
+module.exports.snipeResume = async (bot, msg) => {
+  const chatId = msg.chat.id;
+  const userId = chatId.toString();
+
+  try {
+    const pausedTargets = await SnipeTarget.find({
+      userId: userId,
+      snipeStatus: "paused"
+    });
+
+    if (pausedTargets.length === 0) {
+      return bot.sendMessage(chatId, "⚠️ No paused snipe targets to resume.");
+    }
+
+    // Resume all paused targets
+    const updateResult = await SnipeTarget.updateMany(
+      { userId: userId, snipeStatus: "paused" },
+      { snipeStatus: "pending", isActive: true }
+    );
+
+    bot.sendMessage(
+      chatId,
+      `▶️ *Sniping Resumed*\n\n` +
+      `📊 Resumed ${updateResult.modifiedCount} snipe target(s)\n\n` +
+      `Bot will now monitor for opportunities.`
+    );
+  } catch (error) {
+    console.error("Error resuming snipe targets:", error);
+    bot.sendMessage(chatId, `❌ Error resuming snipe targets: ${error.message}`);
+  }
+};
+
+module.exports.showSnipeStats = async (bot, msg) => {
+  const chatId = msg.chat.id;
+  const userId = chatId.toString();
+
+  try {
+    // Get execution statistics
+    const stats = await SnipeExecution.getExecutionStats(userId, 30);
+    const recentExecutions = await SnipeExecution.getRecentExecutions(userId, 5);
+    const activeTargets = await SnipeTarget.getActiveTargets(userId);
+
+    let message = `📊 *Sniping Statistics* (Last 30 days)\n\n`;
+
+    // Overall stats
+    const totalExecutions = stats.reduce((sum, stat) => sum + stat.count, 0);
+    const successfulExecutions = stats.find(s => s._id === "success")?.count || 0;
+    const failedExecutions = stats.find(s => s._id === "failed")?.count || 0;
+    const successRate = totalExecutions > 0 ? ((successfulExecutions / totalExecutions) * 100).toFixed(1) : 0;
+
+    message += `🎯 **Active Targets:** ${activeTargets.length}\n`;
+    message += `🔄 **Total Executions:** ${totalExecutions}\n`;
+    message += `✅ **Successful:** ${successfulExecutions}\n`;
+    message += `❌ **Failed:** ${failedExecutions}\n`;
+    message += `📈 **Success Rate:** ${successRate}%\n\n`;
+
+    // Performance metrics
+    if (stats.length > 0) {
+      const avgExecutionTime = stats.reduce((sum, stat) => sum + (stat.avgExecutionTime || 0), 0) / stats.length;
+      const avgSlippage = stats.reduce((sum, stat) => sum + (stat.avgSlippage || 0), 0) / stats.length;
+      const totalSpent = stats.reduce((sum, stat) => sum + (stat.totalAmountIn || 0), 0);
+
+      message += `⚡ **Avg Execution Time:** ${Math.round(avgExecutionTime)}ms\n`;
+      message += `📊 **Avg Slippage:** ${avgSlippage.toFixed(2)}%\n`;
+      message += `💰 **Total SOL Spent:** ${totalSpent.toFixed(4)}\n\n`;
+    }
+
+    // Recent executions
+    if (recentExecutions.length > 0) {
+      message += `🕒 **Recent Executions:**\n`;
+      for (const execution of recentExecutions.slice(0, 3)) {
+        const statusIcon = execution.status === "success" ? "✅" : "❌";
+        const timeAgo = Math.floor((Date.now() - execution.createdAt) / (1000 * 60));
+        message += `${statusIcon} ${execution.tokenSymbol} - ${timeAgo}m ago\n`;
+      }
+    } else {
+      message += `📭 No recent executions found.\n`;
+    }
+
+    message += `\n*Use /snipe_add to create new targets.*`;
+
+    bot.sendMessage(chatId, message, { parse_mode: "Markdown" });
+  } catch (error) {
+    console.error("Error getting snipe stats:", error);
+    bot.sendMessage(chatId, `❌ Error getting snipe statistics: ${error.message}`);
+  }
+};
+
+module.exports.showSnipingMenu = async (bot, msg) => {
+  const chatId = msg.chat.id;
+  const userId = chatId.toString();
+
+  try {
+    const activeTargets = await SnipeTarget.getActiveTargets(userId);
+    const recentExecutions = await SnipeExecution.getRecentExecutions(userId, 3);
+
+    const message = `
+🎯 *Solana Sniping Bot*
+
+**Current Status:**
+📊 Active Targets: ${activeTargets.length}
+📈 Recent Executions: ${recentExecutions.length}
+
+**Quick Actions:**
+    `;
+
+    const keyboard = [
+      [
+        { text: "➕ Add Target", callback_data: "snipe_add_help" },
+        { text: "📋 List Targets", callback_data: "snipe_list" }
+      ],
+      [
+        { text: "⏸️ Pause All", callback_data: "snipe_pause" },
+        { text: "▶️ Resume All", callback_data: "snipe_resume" }
+      ],
+      [
+        { text: "📊 Statistics", callback_data: "snipe_stats" },
+        { text: "❓ Snipe Help", callback_data: "snipe_help" }
+      ],
+      [
+        { text: "🔄 Back to Main Menu", callback_data: "menu_main" }
+      ]
+    ];
+
+    bot.sendMessage(chatId, message, {
+      parse_mode: "Markdown",
+      reply_markup: { inline_keyboard: keyboard }
+    });
+  } catch (error) {
+    console.error("Error showing sniping menu:", error);
+    bot.sendMessage(chatId, `❌ Error loading sniping menu: ${error.message}`);
+  }
 };

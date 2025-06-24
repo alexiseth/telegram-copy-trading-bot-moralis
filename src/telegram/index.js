@@ -11,63 +11,107 @@ let bot;
 const initBot = async () => {
   console.log("Initializing Telegram bot...");
 
-  // Create bot instance with balanced polling
+  // Create bot instance without polling (we'll implement manual polling)
   bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { 
-    polling: {
-      interval: 1000,       // Poll every 1 second - fast but stable
-      autoStart: true,
-      params: {
-        timeout: 10,        // Polling timeout
-        limit: 50           // Process up to 50 updates at once
-      }
+    polling: false
+  });
+
+  // Start manual polling
+  startManualPolling();
+
+  // Handle messages directly instead of using onText (which doesn't work well with manual polling)
+  bot.on('message', (msg) => {
+    console.log(`📨 Processing message: "${msg.text}" from chat ${msg.chat.id}`);
+    
+    if (!msg.text || !msg.text.startsWith('/')) {
+      return;
     }
-  });
-
-  // Register command handlers
-  bot.onText(/\/start/, (msg) => {
-    console.log('Handling /start command');
-    commandHandlers.start(bot, msg);
-  });
-
-  bot.onText(/\/add (.+)/, (msg, match) => {
-    commandHandlers.addWallet(bot, msg, match);
-  });
-
-  bot.onText(/\/remove (.+)/, (msg, match) => {
-    commandHandlers.removeWallet(bot, msg, match);
-  });
-
-  bot.onText(/\/list/, (msg) => {
-    commandHandlers.listWallets(bot, msg);
-  });
-
-  bot.onText(/\/status/, (msg) => {
-    commandHandlers.status(bot, msg);
-  });
-
-  bot.onText(/\/balance (.+)/, (msg, match) => {
-    commandHandlers.balance(bot, msg, match);
-  });
-
-  bot.onText(/\/transactions (.+)/, (msg, match) => {
-    commandHandlers.transactions(bot, msg, match);
-  });
-
-  bot.onText(/\/help/, (msg) => {
-    commandHandlers.help(bot, msg);
-  });
-
-  // Add specific command to set chat ID
-  bot.onText(/\/setchatid/, (msg) => {
-    commandHandlers.setChatId(bot, msg);
+    
+    const command = msg.text.trim();
+    const parts = command.split(' ');
+    const cmd = parts[0];
+    
+    try {
+      console.log(`⚡ Executing command: ${cmd}`);
+      
+      switch (cmd) {
+        case '/start':
+          console.log('🚀 Executing /start handler');
+          commandHandlers.start(bot, msg);
+          break;
+        case '/help':
+          commandHandlers.help(bot, msg);
+          break;
+        case '/list':
+          commandHandlers.listWallets(bot, msg);
+          break;
+        case '/status':
+          commandHandlers.status(bot, msg);
+          break;
+        case '/setchatid':
+          commandHandlers.setChatId(bot, msg);
+          break;
+        case '/snipe_list':
+          console.log('🎯 Executing /snipe_list handler');
+          commandHandlers.snipeList(bot, msg);
+          break;
+        case '/snipe_pause':
+          commandHandlers.snipePause(bot, msg);
+          break;
+        case '/snipe_resume':
+          commandHandlers.snipeResume(bot, msg);
+          break;
+        case '/snipe_stats':
+          commandHandlers.showSnipeStats(bot, msg);
+          break;
+        default:
+          // Handle commands with parameters
+          if (cmd === '/add' && parts.length > 1) {
+            const match = [command, parts.slice(1).join(' ')];
+            commandHandlers.addWallet(bot, msg, match);
+          } else if (cmd === '/remove' && parts.length > 1) {
+            const match = [command, parts.slice(1).join(' ')];
+            commandHandlers.removeWallet(bot, msg, match);
+          } else if (cmd === '/balance' && parts.length > 1) {
+            const match = [command, parts.slice(1).join(' ')];
+            commandHandlers.balance(bot, msg, match);
+          } else if (cmd === '/transactions' && parts.length > 1) {
+            const match = [command, parts.slice(1).join(' ')];
+            commandHandlers.transactions(bot, msg, match);
+          } else if (cmd === '/snipe_add' && parts.length > 1) {
+            console.log('🎯 Executing /snipe_add handler');
+            const match = [command, parts.slice(1).join(' ')];
+            commandHandlers.snipeAdd(bot, msg, match);
+          } else if (cmd === '/snipe_remove' && parts.length > 1) {
+            const match = [command, parts.slice(1).join(' ')];
+            commandHandlers.snipeRemove(bot, msg, match);
+          } else {
+            console.log(`❓ Unknown command: ${cmd}`);
+            bot.sendMessage(msg.chat.id, `Unknown command: ${cmd}\\nUse /help to see available commands.`);
+          }
+          break;
+      }
+      
+      console.log(`✅ Command ${cmd} executed successfully`);
+    } catch (error) {
+      console.error(`❌ Error executing command ${cmd}:`, error);
+      bot.sendMessage(msg.chat.id, `❌ Error executing command: ${error.message}`);
+    }
   });
 
   // Handle callback queries (button presses)
   bot.on('callback_query', async (callbackQuery) => {
+    console.log(`🔘 Callback query received: "${callbackQuery.data}" from chat ${callbackQuery.message.chat.id}`);
+    
     try {
+      await bot.answerCallbackQuery(callbackQuery.id);
+      console.log(`✅ Answered callback query: ${callbackQuery.data}`);
+      
       await commandHandlers.handleMenuCallback(bot, callbackQuery);
+      console.log(`✅ Handled callback query: ${callbackQuery.data}`);
     } catch (error) {
-      console.error('Error handling callback query:', error.message);
+      console.error(`❌ Error handling callback query "${callbackQuery.data}":`, error.message);
+      
       // Try to answer the callback query to prevent timeout
       try {
         await bot.answerCallbackQuery(callbackQuery.id, { text: 'Error processing request' });
@@ -77,51 +121,25 @@ const initBot = async () => {
     }
   });
 
-  // Handle incoming messages
-  bot.on("message", (msg) => {
-    console.log(`Received message: ${JSON.stringify(msg)}`);
-    
-    // Only respond to messages that start with a slash (commands)
-    if (msg.text && msg.text.startsWith("/")) {
-      const command = msg.text.split(" ")[0];
-      console.log(`Processing command: ${command}`);
 
-      // Check if the command is already handled
-      const knownCommands = [
-        "/start",
-        "/add",
-        "/remove",
-        "/list",
-        "/status",
-        "/balance",
-        "/transactions",
-        "/help",
-        "/setchatid",
-      ];
-
-      const isKnownCommand = knownCommands.some((cmd) =>
-        command.startsWith(cmd)
-      );
-
-      if (!isKnownCommand) {
-        const chatId = msg.chat.id;
-        console.log(`Unknown command: ${command}`);
-        bot.sendMessage(
-          chatId,
-          `Unknown command: ${command}\nUse /help to see available commands.`
-        );
-      }
-    }
-  });
-
-  // Check if we have a stored chat ID
+  // Check if we have a stored chat ID and auto-send start message
   try {
     const chatIdConfig = await BotConfig.findOne({ setting: "chatId" });
     if (chatIdConfig && chatIdConfig.value) {
       console.log(`Found stored chat ID: ${chatIdConfig.value}`);
-
-      // Send a startup message if you want
-      // await bot.sendMessage(chatIdConfig.value, '🤖 Bot has been restarted and is now online!');
+      
+      // Auto-send start message
+      setTimeout(async () => {
+        try {
+          await commandHandlers.start(bot, { 
+            chat: { id: chatIdConfig.value },
+            from: { first_name: "User" }
+          });
+          console.log("✅ Auto-sent start message");
+        } catch (error) {
+          console.error("❌ Error sending auto-start message:", error);
+        }
+      }, 2000); // Wait 2 seconds for bot to fully initialize
     } else {
       console.log(
         "No chat ID found in database. Please run /start or /setchatid to set one."
@@ -142,6 +160,44 @@ const initBot = async () => {
 
   console.log("Telegram bot initialized and listening...");
   return bot;
+};
+
+// Manual polling implementation
+let pollingOffset = 0;
+
+const startManualPolling = async () => {
+  console.log("🔄 Starting manual polling...");
+  
+  const poll = async () => {
+    try {
+      const updates = await bot.getUpdates({
+        offset: pollingOffset,
+        timeout: 5,
+        limit: 50
+      });
+
+      for (const update of updates) {
+        pollingOffset = update.update_id + 1;
+        
+        if (update.message) {
+          // Emit message event manually
+          bot.emit('message', update.message);
+        }
+        
+        if (update.callback_query) {
+          // Emit callback_query event manually
+          bot.emit('callback_query', update.callback_query);
+        }
+      }
+    } catch (error) {
+      console.error("❌ Polling error:", error.message);
+    }
+    
+    // Continue polling
+    setTimeout(poll, 1000);
+  };
+  
+  poll();
 };
 
 // Get active chat ID from database

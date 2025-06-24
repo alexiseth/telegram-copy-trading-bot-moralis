@@ -5,6 +5,7 @@ const { initBot } = require("./telegram");
 const { startSwapFetcher } = require("./services/polling/swapFetcher");
 const { startSwapProcessor } = require("./services/polling/swapProcessor");
 const { startCleanupService } = require("./services/cleanup");
+const TokenMonitor = require("./services/sniping/tokenMonitor");
 
 async function startBot() {
   try {
@@ -27,7 +28,18 @@ async function startBot() {
     await startSwapProcessor();
     await startCleanupService();
 
-    console.log("All services started successfully!");
+    // Initialize and start sniping token monitor (with error handling)
+    try {
+      console.log("🎯 Initializing Solana Sniping Bot...");
+      const tokenMonitor = new TokenMonitor();
+      await tokenMonitor.initialize();
+      console.log("✅ Sniping Bot initialized successfully!");
+    } catch (snipingError) {
+      console.warn("⚠️  Sniping Bot initialization failed, but continuing with basic functionality:", snipingError.message);
+    }
+    
+    console.log("✅ All services started successfully!");
+    console.log("🤖 Bot is ready to accept commands!");
 
     // Handle application shutdown
     process.on("SIGINT", async () => {

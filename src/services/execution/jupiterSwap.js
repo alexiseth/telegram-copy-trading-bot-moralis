@@ -5,7 +5,7 @@ const {
   PublicKey,
   VersionedTransaction,
 } = require("@solana/web3.js");
-const { getSolanaConnection, getSolanaWallet } = require("../wallets/solana");
+const { getSolanaConnection, getSolanaWallet, checkSufficientBalance } = require("../wallets/solana");
 const base58 = require("base-58");
 require("dotenv").config();
 
@@ -43,35 +43,33 @@ const executeJupiterSwap = async (swap) => {
       throw new Error(`Invalid amount: ${fromToken.amount}`);
     }
 
-    // Check wallet balance
+    // Check wallet balance using the new comprehensive balance checking
     try {
-      let balance;
-      if (fromToken.address === "So11111111111111111111111111111111111111112") {
-        // Native SOL
-        balance = await connection.getBalance(wallet.publicKey);
-        console.log(`SOL balance: ${balance / 1000000000} SOL`);
-      } else {
-        // For SPL tokens, you'd need to implement token balance checking
-        // This is a placeholder - in production, implement proper SPL balance checking
-        console.log(`Warning: SPL token balance check not implemented`);
-        balance = inputAmount * 2; // Assuming we have enough for now
-      }
+      console.log(`Checking balance for ${fromToken.symbol} (${fromToken.address})...`);
+      
+      const balanceInfo = await checkSufficientBalance(
+        fromToken.address,
+        fromToken.amount,
+        fromToken.decimals
+      );
 
-      // Add buffer for transaction fees (0.01 SOL)
-      const neededAmount =
-        fromToken.address === "So11111111111111111111111111111111111111112"
-          ? inputAmount + 10000000 // Add 0.01 SOL for fees if swapping SOL
-          : inputAmount;
+      console.log(`Current balance: ${balanceInfo.formattedBalance} ${fromToken.symbol}`);
+      console.log(`Required amount: ${balanceInfo.formattedRequired} ${fromToken.symbol}`);
 
-      if (balance < neededAmount) {
+      if (!balanceInfo.hasBalance) {
         throw new Error(
-          `Insufficient balance. Have ${
-            balance / Math.pow(10, fromToken.decimals)
-          } ${fromToken.symbol}, need at least ${
-            neededAmount / Math.pow(10, fromToken.decimals)
-          } ${fromToken.symbol}`
+          `Insufficient balance. Have ${balanceInfo.formattedBalance} ${fromToken.symbol}, need ${balanceInfo.formattedRequired} ${fromToken.symbol}`
         );
       }
+
+      // For SPL tokens, check if token account exists
+      if (fromToken.address !== "So11111111111111111111111111111111111111112" && !balanceInfo.tokenAccountExists) {
+        throw new Error(
+          `Token account does not exist for ${fromToken.symbol}. You need to create an associated token account first.`
+        );
+      }
+
+      console.log(`✅ Balance check passed: ${balanceInfo.formattedBalance} ${fromToken.symbol} available`);
     } catch (balanceError) {
       console.error("Error checking balance:", balanceError);
       throw new Error(`Failed to verify balance: ${balanceError.message}`);
@@ -124,7 +122,9 @@ const executeJupiterSwap = async (swap) => {
     );
 
     // Step 3: Execute Order
-    console.log("Submitting transaction to Jupiter Ultra API...");
+    console.log("🚀 Submitting transaction to Jupiter Ultra API...");
+    const executeStartTime = Date.now();
+    
     const { data: executeResponse } = await axios.post(
       "https://lite-api.jup.ag/ultra/v1/execute",
       {
@@ -135,38 +135,114 @@ const executeJupiterSwap = async (swap) => {
         headers: {
           "Content-Type": "application/json",
         },
+        timeout: 30000 // 30 second timeout
       }
     );
+    
+    const executeTime = Date.now() - executeStartTime;
+    console.log(`⏱️  Transaction execution took ${executeTime}ms`);
 
-    // Handle response
+    // Handle response with enhanced error handling
     if (executeResponse.status === "Success") {
-      console.log("Swap successful!");
+      console.log("✅ Jupiter swap executed successfully!");
       const inputAmount =
         executeResponse.inputAmountResult / Math.pow(10, fromToken.decimals);
       const outputAmount =
         executeResponse.outputAmountResult / Math.pow(10, toToken.decimals);
 
-      console.log(`Input: ${inputAmount} ${fromToken.symbol}`);
-      console.log(`Output: ${outputAmount} ${toToken.symbol}`);
+      console.log(`📊 Input: ${inputAmount} ${fromToken.symbol}`);
+      console.log(`📊 Output: ${outputAmount} ${toToken.symbol}`);
       console.log(
-        `Transaction: https://solscan.io/tx/${executeResponse.signature}`
+        `🔗 Transaction: https://solscan.io/tx/${executeResponse.signature}`
       );
+
+      // Optional: Wait for transaction confirmation
+      let confirmationStatus = "submitted";
+      let confirmationTime = null;
+      
+      try {
+        console.log("⏳ Checking transaction confirmation...");
+        const confirmationStartTime = Date.now();
+        
+        const connection = getSolanaConnection();
+        const signature = executeResponse.signature;
+        
+        // Wait for confirmation with timeout
+        const confirmation = await connection.confirmTransaction(signature, 'confirmed');
+        
+        if (confirmation.value.err) {
+          console.warn(`⚠️  Transaction confirmed but with error: ${JSON.stringify(confirmation.value.err)}`);
+          confirmationStatus = "failed";
+        } else {
+          confirmationTime = Date.now() - confirmationStartTime;
+          confirmationStatus = "confirmed";
+          console.log(`✅ Transaction confirmed in ${confirmationTime}ms`);
+        }
+      } catch (confirmError) {
+        console.warn(`⚠️  Could not confirm transaction: ${confirmError.message}`);
+        confirmationStatus = "timeout";
+      }
 
       return {
         success: true,
         txHash: executeResponse.signature,
         message: `Transaction executed successfully: ${inputAmount} ${fromToken.symbol} → ${outputAmount} ${toToken.symbol}`,
+        inputAmount,
+        outputAmount,
+        explorerUrl: `https://solscan.io/tx/${executeResponse.signature}`,
+        confirmationStatus,
+        confirmationTime,
+        executionTime: executeTime
       };
     } else {
-      throw new Error(
-        `Swap execution failed: ${JSON.stringify(executeResponse)}`
-      );
+      // Enhanced error handling for different failure types
+      let errorMessage = "Swap execution failed";
+      
+      if (executeResponse.error) {
+        errorMessage = executeResponse.error;
+      } else if (executeResponse.message) {
+        errorMessage = executeResponse.message;
+      } else if (executeResponse.status) {
+        errorMessage = `Swap failed with status: ${executeResponse.status}`;
+      }
+
+      console.error(`❌ Jupiter swap failed: ${errorMessage}`);
+      throw new Error(errorMessage);
     }
   } catch (error) {
-    console.error("Error executing Jupiter Ultra swap:", error);
+    console.error("❌ Error executing Jupiter Ultra swap:", error);
+    
+    // Enhanced error categorization
+    let errorCategory = "Unknown";
+    let userFriendlyMessage = error.message;
+
+    if (error.message.includes("Insufficient balance")) {
+      errorCategory = "Balance";
+      userFriendlyMessage = "Insufficient balance to execute the swap";
+    } else if (error.message.includes("Token account does not exist")) {
+      errorCategory = "TokenAccount";
+      userFriendlyMessage = "Token account needs to be created first";
+    } else if (error.message.includes("Invalid token addresses")) {
+      errorCategory = "TokenAddress";
+      userFriendlyMessage = "Invalid token addresses provided";
+    } else if (error.message.includes("Failed to get order")) {
+      errorCategory = "Jupiter";
+      userFriendlyMessage = "Jupiter API failed to create swap order";
+    } else if (error.response && error.response.status === 429) {
+      errorCategory = "RateLimit";
+      userFriendlyMessage = "Rate limited by Jupiter API, please try again later";
+    } else if (error.message.includes("network") || error.message.includes("connection")) {
+      errorCategory = "Network";
+      userFriendlyMessage = "Network connection error, please try again";
+    }
+
+    console.error(`🏷️  Error category: ${errorCategory}`);
+    
     return {
       success: false,
-      error: error.message || "Jupiter swap failed without specific error",
+      error: userFriendlyMessage,
+      errorCategory,
+      originalError: error.message,
     };
   }
 };

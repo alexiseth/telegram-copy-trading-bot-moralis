@@ -3,14 +3,20 @@
   "version": "1.0.0",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "nodemon src/index.js",
+    "start": "node start.js",
+    "dev": "node solana-bot.js",
+    "original": "node src/index.js",
     "init-db": "node scripts/initDb.js"
   },
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "dependencies": {
+    "@solana/spl-token": "^0.4.13",
     "@solana/web3.js": "^1.98.2",
     "axios": "^1.9.0",
     "base-58": "^0.0.1",
+    "bs58": "^6.0.0",
     "dotenv": "^16.5.0",
     "ethers": "5.0.0",
     "mongodb": "^6.3.0",

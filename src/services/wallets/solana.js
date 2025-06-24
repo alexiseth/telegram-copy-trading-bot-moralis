@@ -1,5 +1,6 @@
 // src/services/wallets/solana.js
 const { Connection, PublicKey, Keypair } = require("@solana/web3.js");
+const { getAccount, getAssociatedTokenAddress, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID, createAssociatedTokenAccountInstruction } = require("@solana/spl-token");
 const base58 = require("base-58"); // Using base-58 package instead of bs58
 const axios = require("axios");
 require("dotenv").config();
@@ -30,9 +31,15 @@ const getSolanaWallet = () => {
 // Create a Solana connection
 const getSolanaConnection = () => {
   try {
-    const rpcUrl =
-      process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
-    return new Connection(rpcUrl);
+    let rpcUrl = process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
+    
+    // If using QuickNode, append the API key if it's provided separately
+    if (process.env.QUICKNODE_API_KEY && rpcUrl.includes("quiknode.pro") && !rpcUrl.includes(process.env.QUICKNODE_API_KEY)) {
+      rpcUrl = rpcUrl.replace("your-api-key", process.env.QUICKNODE_API_KEY);
+    }
+    
+    console.log(`🔗 Connecting to Solana RPC: ${rpcUrl.replace(/\/[^/]*$/, "/***")}`); // Hide API key in logs
+    return new Connection(rpcUrl, 'confirmed');
   } catch (error) {
     console.error("Error creating Solana connection:", error);
     throw new Error(`Failed to initialize Solana connection: ${error.message}`);
@@ -118,8 +125,112 @@ const getSolanaBalance = async () => {
   }
 };
 
+// Get SPL token balance for a specific token
+const getSplTokenBalance = async (tokenMintAddress, walletAddress = null) => {
+  try {
+    const connection = getSolanaConnection();
+    const wallet = walletAddress ? new PublicKey(walletAddress) : getSolanaWallet().publicKey;
+    const tokenMint = new PublicKey(tokenMintAddress);
+
+    // Get the associated token account address
+    const associatedTokenAccount = await getAssociatedTokenAddress(
+      tokenMint,
+      wallet,
+      false, // allowOwnerOffCurve
+      TOKEN_PROGRAM_ID,
+      ASSOCIATED_TOKEN_PROGRAM_ID
+    );
+
+    try {
+      const tokenAccount = await getAccount(
+        connection,
+        associatedTokenAccount,
+        'confirmed',
+        TOKEN_PROGRAM_ID
+      );
+
+      return {
+        address: associatedTokenAccount.toString(),
+        balance: tokenAccount.amount.toString(),
+        exists: true
+      };
+    } catch (error) {
+      // Token account doesn't exist
+      if (error.name === 'TokenAccountNotFoundError') {
+        return {
+          address: associatedTokenAccount.toString(),
+          balance: '0',
+          exists: false
+        };
+      }
+      throw error;
+    }
+  } catch (error) {
+    console.error(`Error getting SPL token balance for ${tokenMintAddress}:`, error);
+    throw new Error(`Failed to get SPL token balance: ${error.message}`);
+  }
+};
+
+// Check if wallet has sufficient token balance
+const checkSufficientBalance = async (tokenMintAddress, requiredAmount, decimals) => {
+  try {
+    if (tokenMintAddress === "So11111111111111111111111111111111111111112") {
+      // Native SOL
+      const connection = getSolanaConnection();
+      const wallet = getSolanaWallet();
+      const balance = await connection.getBalance(wallet.publicKey);
+      
+      // Convert required amount to lamports
+      const requiredLamports = Math.floor(parseFloat(requiredAmount) * Math.pow(10, decimals));
+      
+      // Add buffer for transaction fees (0.01 SOL = 10,000,000 lamports)
+      const neededAmount = requiredLamports + 10000000;
+      
+      return {
+        hasBalance: balance >= neededAmount,
+        currentBalance: balance.toString(),
+        requiredAmount: neededAmount.toString(),
+        formattedBalance: (balance / Math.pow(10, 9)).toString(),
+        formattedRequired: (neededAmount / Math.pow(10, 9)).toString()
+      };
+    } else {
+      // SPL Token
+      const tokenInfo = await getSplTokenBalance(tokenMintAddress);
+      const requiredAmountRaw = Math.floor(parseFloat(requiredAmount) * Math.pow(10, decimals));
+      
+      return {
+        hasBalance: tokenInfo.exists && BigInt(tokenInfo.balance) >= BigInt(requiredAmountRaw),
+        currentBalance: tokenInfo.balance,
+        requiredAmount: requiredAmountRaw.toString(),
+        formattedBalance: tokenInfo.exists ? (parseFloat(tokenInfo.balance) / Math.pow(10, decimals)).toString() : '0',
+        formattedRequired: requiredAmount,
+        tokenAccountExists: tokenInfo.exists,
+        tokenAccountAddress: tokenInfo.address
+      };
+    }
+  } catch (error) {
+    console.error('Error checking sufficient balance:', error);
+    throw new Error(`Failed to check balance: ${error.message}`);
+  }
+};
+
+// Get rent-exempt minimum for account creation
+const getRentExemptMinimum = async (accountSize = 165) => {
+  try {
+    const connection = getSolanaConnection();
+    const rentExemptMinimum = await connection.getMinimumBalanceForRentExemption(accountSize);
+    return rentExemptMinimum;
+  } catch (error) {
+    console.error('Error getting rent exempt minimum:', error);
+    throw new Error(`Failed to get rent exempt minimum: ${error.message}`);
+  }
+};
+
 module.exports = {
   getSolanaWallet,
   getSolanaConnection,
   getSolanaBalance,
+  getSplTokenBalance,
+  checkSufficientBalance,
+  getRentExemptMinimum,
 };
